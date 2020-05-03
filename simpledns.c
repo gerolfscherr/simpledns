@@ -1,8 +1,11 @@
+#define _GNU_SOURCE
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <stdint.h>
 #include <unistd.h>
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <strings.h>
@@ -11,6 +14,7 @@
 #include <stralloc.h>
 #include <dns.h>
 #include <limits.h>
+#include <errno.h>
 
 #include <uint16.h>
 #include <byte.h>
@@ -50,7 +54,8 @@ static struct db_entry_t *my_db;
 static int my_db_sz;
 static int my_db_defaultindex=-1;
 static int my_verbose;
-
+static uid_t my_uid;
+static gid_t my_gid;
 
 void print_dns_header(const struct dns_header_t*buf) {
 	printf("id:%d qr:%d opcode:%d aa:%d tc:%d, rd:%d, ra:%d, z:%d, rcode:%d, qdcount:%d, ancount:%d, nscount:%d, arcount:%d, f1:%d f2:%d flags16:%x\n", ntohs(buf->id), buf->f.qr, buf->f.opcode, buf->f.aa, buf->f.tc, buf->f.rd, buf->f.ra, buf->f.zero, buf->f.rcode, ntohs(buf->qdcount), ntohs(buf->ancount), ntohs(buf->nscount), ntohs(buf->arcount), buf->ff.flags1, buf->ff.flags2, buf->flags16);
@@ -165,7 +170,42 @@ process_end:
 
 }
 
-int start(int port) {
+
+
+
+void maybe_drop_privileges() {
+
+	printf("before:getgid:%d getegid:%d getuid:%d geteuid:%d my_uid:%d my_gid:%d\n",
+		getgid(), getegid(), getuid(), geteuid(), my_uid, my_gid);
+	
+	if ((getgid()==0 || getegid()==0 || getuid()==0 || geteuid()==0) && (my_gid == 0 || my_uid == 0) ) {
+		errno=1;
+		perror("running as root oder sudo root but no uid set for dropping privileges");
+		exit(123);
+	}
+	if (my_gid == 0 || my_uid == 0) {
+		perror("either user id or gid is set to 0, refusing to run");
+		exit(123);
+	}
+	
+	if ( (my_gid > 0 ) &&    (-1 == setresgid(my_gid, my_gid, my_gid))) {
+		perror("cant set gid");
+		exit(123);
+	}
+
+	if ( (my_uid > 0 ) &&  (-1 == setresuid(my_uid, my_uid, my_uid))) {
+		perror("cant set uid");
+		exit(123);
+	}
+	printf("after:getgid:%d getegid:%d getuid:%d geteuid:%d my_uid:%d my_gid:%d\n",
+		getgid(), getegid(), getuid(), geteuid(), my_uid, my_gid);
+	
+}
+
+
+
+
+int start(int port, struct in_addr * bind_addr) {
 	printf("listening at %d\n", port);
 	int sock = socket(AF_INET, SOCK_DGRAM, 0);
 	if (sock < 0) {
@@ -177,12 +217,19 @@ int start(int port) {
 	struct sockaddr_in srv;
 	bzero(&srv, sizeof(struct sockaddr_in));
 	srv.sin_family = AF_INET;
+
+	if (bind_addr == NULL) {
 	srv.sin_addr.s_addr= htonl(INADDR_ANY); // auf alle listenen
+	} else {
+		memcpy(&srv.sin_addr, bind_addr, sizeof(struct in_addr));
+	}
+
 	srv.sin_port = htons(port);
 	if (bind(sock, (const struct sockaddr*) &srv, sizeof(srv)) < 0) {
 		perror("bind");
 		return -1;
 	}
+	maybe_drop_privileges();
 
 	#define BUF_SZ 1024
 	char buf[BUF_SZ];
@@ -228,10 +275,12 @@ int main(int argc, char** argv) {
 	int c;
 	int port = 10053;
 	int ret = 0;	
-	while ((c = getopt(argc, argv, "hvp:f:")) != -1) {
+	struct in_addr* bind_addr = NULL;
+	struct in_addr addr;
+	while ((c = getopt(argc, argv, "b:hvp:f:u:g:")) != -1) {
 		switch (c) {
 			case 'h':	
-				 printf("-p port : port, -f conffile -v : verbose, -?: help\n");
+				 printf("-u uid -g gid -p port : port, -f conffile -v : verbose, -?: help, -b: bindaddress\n");
 				 exit(0);
 			break;
 			case 'v':my_verbose=1;
@@ -247,10 +296,28 @@ int main(int argc, char** argv) {
 			case 'f':
 				memcpy(&conffn, optarg, strlen(optarg));
 			break;
+			case 'b':
+				printf("converting:%s\n", optarg);
+				if (!optarg || (inet_aton(optarg, &addr) == -1)) {
+					printf("invalid bind address:%s\n", optarg);
+					exit(123);
+				}
+				bind_addr = &addr;
+			break;
+			case 'u':
+				my_uid = atoi(optarg);
+			break;
+			case 'g':
+				my_gid = atoi(optarg);
+			break;
 		}
 	}
+
+
+
 	if (my_verbose) {
 		printf("starting with conffile: %s at port %d\n", conffn, port);
+		printf("uid:%d gid:%d\n", my_uid, my_gid);
 	}
 
 	my_db_sz = read_db_entries(conffn, &my_db);
@@ -273,7 +340,7 @@ int main(int argc, char** argv) {
 		exit(123);
 	}
 
-	start(port);
+	start(port, bind_addr);
 	main_end:
 	return ret;
 }
