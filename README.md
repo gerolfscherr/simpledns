@@ -1,0 +1,2 @@
+# simpledns
+simple dns server
