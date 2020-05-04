@@ -28,7 +28,7 @@ TODO:
 * less verbose
 
 DONE:
-* privilege dropping (!)
+* privilege dropping 
 * binding to a specific interface.
 
 
