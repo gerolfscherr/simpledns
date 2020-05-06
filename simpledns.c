@@ -57,19 +57,19 @@ static int my_verbose;
 static uid_t my_uid;
 static gid_t my_gid;
 
-void print_dns_header(const struct dns_header_t*buf) {
+static void print_dns_header(const struct dns_header_t*buf) {
 	printf("id:%d qr:%d opcode:%d aa:%d tc:%d, rd:%d, ra:%d, z:%d, rcode:%d, qdcount:%d, ancount:%d, nscount:%d, arcount:%d, f1:%d f2:%d flags16:%x\n", ntohs(buf->id), buf->f.qr, buf->f.opcode, buf->f.aa, buf->f.tc, buf->f.rd, buf->f.ra, buf->f.zero, buf->f.rcode, ntohs(buf->qdcount), ntohs(buf->ancount), ntohs(buf->nscount), ntohs(buf->arcount), buf->ff.flags1, buf->ff.flags2, buf->flags16);
 //	printf("id:%d flags1:%d flags2:%d qdcount:%d ancount:%d nscount:%d arcount:%d\n",ntohs(buf->id), buf->flags1, buf->flags2,buf->qdcount, buf->ancount, buf->nscount, buf->arcount);
 }
 
 
-void die(const char* msg) {
+static void die(const char* msg) {
 	perror(msg);
 	exit(123);
 }
 
 
-int lookup(char*buf, stralloc*name) {
+static int lookup(char*buf, stralloc*name) {
 	for (int i = 0 ; i< my_db_sz; i++) {
 		if (!strncmp(my_db[i].name, name->s, name->len)) {
 			memcpy(buf, &my_db[i].addr, sizeof(struct in_addr));
@@ -84,7 +84,7 @@ int lookup(char*buf, stralloc*name) {
 
 // https://tools.ietf.org/html/rfc1035 section 4:
 //
-int process_query(char* buf, int len) {
+static int process_query(char* buf, int len) {
 	const char*buf0 = buf;
 	const char*end = buf+len;
 	int ret = -1;
@@ -173,7 +173,7 @@ process_end:
 
 
 
-void maybe_drop_privileges() {
+static void maybe_drop_privileges() {
 
 	printf("before:getgid:%d getegid:%d getuid:%d geteuid:%d my_uid:%d my_gid:%d\n",
 		getgid(), getegid(), getuid(), geteuid(), my_uid, my_gid);
@@ -205,7 +205,7 @@ void maybe_drop_privileges() {
 
 
 
-int start(int port, struct in_addr * bind_addr) {
+static int start(int port, struct in_addr * bind_addr) {
 	printf("listening at %d\n", port);
 	int sock = socket(AF_INET, SOCK_DGRAM, 0);
 	if (sock < 0) {
@@ -263,7 +263,7 @@ start_end:
 
 }
 
-void atshutdown() {
+static void atshutdown() {
 	if(my_db) free(my_db);
 }
 
