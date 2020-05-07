@@ -54,8 +54,8 @@ static struct db_entry_t *my_db;
 static int my_db_sz;
 static int my_db_defaultindex=-1;
 static int my_verbose;
-static uid_t my_uid;
-static gid_t my_gid;
+static uid_t my_uid= 0xFFFFFFFF;
+static gid_t my_gid = 0xFFFFFFFF;
 
 static void print_dns_header(const struct dns_header_t*buf) {
 	printf("id:%d qr:%d opcode:%d aa:%d tc:%d, rd:%d, ra:%d, z:%d, rcode:%d, qdcount:%d, ancount:%d, nscount:%d, arcount:%d, f1:%d f2:%d flags16:%x\n", ntohs(buf->id), buf->f.qr, buf->f.opcode, buf->f.aa, buf->f.tc, buf->f.rd, buf->f.ra, buf->f.zero, buf->f.rcode, ntohs(buf->qdcount), ntohs(buf->ancount), ntohs(buf->nscount), ntohs(buf->arcount), buf->ff.flags1, buf->ff.flags2, buf->flags16);
@@ -84,9 +84,9 @@ static int lookup(char*buf, stralloc*name) {
 
 // https://tools.ietf.org/html/rfc1035 section 4:
 //
-static int process_query(char* buf, int len) {
+static int process_query(char* buf, int len, int max_len) {
 	const char*buf0 = buf;
-	const char*end = buf+len;
+	const char*end = buf+max_len;
 	int ret = -1;
 	struct dns_header_t* header = (struct dns_header_t*)buf;
 		
@@ -121,31 +121,28 @@ static int process_query(char* buf, int len) {
 
 	printf("qtype: %d qclass%d\n", qtype, qclass);
 
-	if (!stralloc_equals(&name, "www.orf.at")) {
-		printf("gotit\n");
+	header->f.qr=1;
+	header->f.rd=1;
+	header->f.ra=1; // das setzt irgendwie das result
+	header->f.rcode = 0;
+	header->qdcount=htons(1);
+	header->ancount=htons(1);
+	header->nscount=htons(0);
+	header->arcount=htons(0);
+	print_dns_header(header);
+	*(uint16_t*)buf= htons(0xc000| 12); // pointer to record this answer belongs to: two MSB bits set, 0ffset from header;
+	buf +=2;
+	*(uint16_t*)buf = htons(1); // type
+	buf +=2;
+	*(uint16_t*)buf = htons(1); // class
+	buf +=2;
+	*(uint32_t*)buf = htonl(6528); // ttl
+	buf +=4;
+	*(uint16_t*)buf = htons(4); // length of ip
+	buf +=2;
 
-		header->f.qr=1;
-		header->f.rd=1;
-		header->f.ra=1; // das setzt irgendwie das result
-		header->f.rcode = 0;
-		header->qdcount=htons(1);
-		header->ancount=htons(1);
-		header->nscount=htons(0);
-		header->arcount=htons(0);
-		print_dns_header(header);
-		*(uint16_t*)buf= htons(0xc000| 12); // pointer to record this answer belongs to: two MSB bits set, 0ffset from header;
-		buf +=2;
-		*(uint16_t*)buf = htons(1); // type
-		buf +=2;
-		*(uint16_t*)buf = htons(1); // class
-		buf +=2;
-		*(uint32_t*)buf = htonl(6528); // ttl
-		buf +=4;
-		*(uint16_t*)buf = htons(4); // length of ip
-		buf +=2;
-
-		lookup(buf, &name); //		memcpy(buf, &my_db[0].addr,sizeof(struct in_addr));
-		buf +=4;
+	lookup(buf, &name); //		memcpy(buf, &my_db[0].addr,sizeof(struct in_addr));
+	buf +=4;
 #if 0
 		*buf++=123;
 		*buf++=45;
@@ -158,8 +155,7 @@ static int process_query(char* buf, int len) {
 
 	//	header->nscount=0;
 	//	header->arcount=0;
-
-	}	
+	
 	if (buf > end) {
 		die("buf > end");
 	}
@@ -178,7 +174,7 @@ static void maybe_drop_privileges() {
 	printf("before:getgid:%d getegid:%d getuid:%d geteuid:%d my_uid:%d my_gid:%d\n",
 		getgid(), getegid(), getuid(), geteuid(), my_uid, my_gid);
 	
-	if ((getgid()==0 || getegid()==0 || getuid()==0 || geteuid()==0) && (my_gid == 0 || my_uid == 0) ) {
+	if ((getgid()==0 || getegid()==0 || getuid()==0 || geteuid()==0) && (my_gid == 0xFFFFFFFF || my_uid == 0xFFFFFFFF) ) {
 		errno=1;
 		perror("running as root oder sudo root but no uid set for dropping privileges");
 		exit(123);
@@ -188,12 +184,12 @@ static void maybe_drop_privileges() {
 		exit(123);
 	}
 	
-	if ( (my_gid > 0 ) &&    (-1 == setresgid(my_gid, my_gid, my_gid))) {
+	if ( (my_gid != 0xFFFFFFFF ) &&    (-1 == setresgid(my_gid, my_gid, my_gid))) {
 		perror("cant set gid");
 		exit(123);
 	}
 
-	if ( (my_uid > 0 ) &&  (-1 == setresuid(my_uid, my_uid, my_uid))) {
+	if ( (my_uid != 0xFFFFFFFF ) &&  (-1 == setresuid(my_uid, my_uid, my_uid))) {
 		perror("cant set uid");
 		exit(123);
 	}
@@ -238,11 +234,12 @@ static int start(int port, struct in_addr * bind_addr) {
 	socklen_t cli_len = sizeof(cli_addr);
 	while(1) {
 		printf("recvfrom\n");
+		bzero(&buf, BUF_SZ); // not strictly necessary but 
 		len = recvfrom(sock, &buf, BUF_SZ, 0, (struct sockaddr*)&cli_addr, &cli_len);
 		printf("got: %ld from %s, cli_len:%d\n", len, inet_ntoa(cli_addr.sin_addr), cli_len);
 		print_hex((const char*)&buf, len);
 		print_hex_dump((const char*)&buf, len);
-		int r = process_query(buf, len);
+		int r = process_query(buf, len, BUF_SZ);
 		if (r == -1) {
 			printf("error\n");
 		} else {
